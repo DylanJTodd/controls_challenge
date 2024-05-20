@@ -11,6 +11,8 @@
 import numpy
 import pandas
 import torch
+import os
+import glob
 from torch import nn
 from torch.nn import functional
 import sklearn.model_selection
@@ -18,8 +20,5 @@ from torch.utils.data import Dataset, DataLoader
 import torch.optim
 from torch.optim.lr_scheduler import StepLR
 import matplotlib.pyplot
+from tinyphysics import TinyPhysicsModel, TinyPhysicsSimulator, CONTROL_START_IDX
 
-print(torch.__version__)
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'Using device: {device}')
