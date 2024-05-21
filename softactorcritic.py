@@ -47,21 +47,27 @@ from tinyphysics import TinyPhysicsModel, TinyPhysicsSimulator, CONTROL_START_ID
 #Training Loop
 
 class ActorNetwork(nn.Module):
-    def __init__(self, max_actions=2):
+    def __init__(self, max_steering=1.0, max_acceleration=1.0):
         super(ActorNetwork, self).__init__()
-        self.max_actions = max_actions
+        self.max_steering = max_steering
+        self.max_acceleration = max_acceleration
         self.layer1 = nn.Linear(4, 512)
         self.layer2 = nn.Linear(512, 256)
         self.layer3 = nn.Linear(256, 64)
-        self.layer4 = nn.Linear(64, 1)
+        self.layer4_steering = nn.Linear(64, 1)
+        self.layer4_acceleration = nn.Linear(64, 1)
 
     def forward(self, input_state):
-        input_state = nn.functional.relu(self.layer1(input_state))
-        input_state = nn.functional.relu(self.layer2(input_state))
-        input_state = nn.functional.relu(self.layer3(input_state))
-        output_action = self.max_actions * torch.tanh(self.layer4(input_state)) #[-2, 2]
+        x = nn.functional.relu(self.layer1(input_state))
+        x = nn.functional.relu(self.layer2(x))
+        x = nn.functional.relu(self.layer3(x))
+        steering = self.max_steering * torch.tanh(self.layer4_steering(x))
+        acceleration = self.max_acceleration * torch.tanh(self.layer4_acceleration(x))
+        return steering, acceleration
+
 
 class CriticNetwork(nn.Module):
+    print("filler function")
     #Ensure to add:
         #Random weight initialization 
         #Maybe bootstrapping (different subsets of data), 
