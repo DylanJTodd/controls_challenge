@@ -2,14 +2,6 @@
 #batch Metrics python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller simple
 #Generate comparison report python eval.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --test_controller simple --baseline_controller open
 
-#Time:                                      t
-#Car Velocity:                              v_ego
-#Forward Acceleration:                      a_ego
-#lateral acceleration due to road roll:     road_lataccel
-
-#Current car lateral acceleration:          current_lataccel
-#Steer input:                               steer_action
-
 import numpy
 import pandas
 import torch
@@ -24,37 +16,11 @@ from torch.optim.lr_scheduler import StepLR
 import matplotlib.pyplot
 from tinyphysics import TinyPhysicsModel, TinyPhysicsSimulator, CONTROL_START_IDX
 
+
 #Actor Network
     # Determines the policy, maximizes expected future rewards
     # Inputs: Current state
     # Outputs: Probability distribution over action space 
-
-#Critic Network
-    #Multiple networks, each taking all inputs, however 8 differently trained networks for ensemble learning.
-    #Evaluates actions taken by actor. Estimates the expected return (Q-value) of taking a specific action given a specific state.
-    #Inputs: Current state, and current action
-    #Outputs: Individual estimate of expected return (Q-value) associated with the state-action pair.
-
-        #Ensure to add:
-        #Random variable weight initialization 
-        #Maybe bootstrapping (different subsets of data), 
-        #Hyperparameter variability
-        #Boosting (THIS IS A MUST, SOUNDS SUPER COOL), boosting is the process of training 
-
-
-#Replay Buffer
-    #Stores experiences during an agents interactions with environment. Breaks temporal correlations by shuffling and taking random buffer samples.
-    #Inputs: Agents interactions with the environment
-
-#SAC Agent Class
-    #Encapsulates the entire SAC algorithm. Coordinates above actions/classes
-    #Contains useful methods for selecting actions, updating networks, and storing/retreiving data
-
-#Environment Class
-    #Represents the environment in which the agent operates. It provides the agent with inputs/observations of the current state and rewards.
-
-#Training Loop
-
 class ActorNetwork(nn.Module):
     def __init__(self, max_steering=1.0, max_acceleration=1.0):
         super(ActorNetwork, self).__init__()
@@ -75,23 +41,41 @@ class ActorNetwork(nn.Module):
         return steering, acceleration
 
 
-
+#Critic Network
+    #Multiple networks, each taking all inputs, however 8 differently trained networks for ensemble learning.
+    #Evaluates actions taken by actor. Estimates the expected return (Q-value) of taking a specific action given a specific state.
+    #Inputs: Current state, and current action
+    #Outputs: Individual estimate of expected return (Q-value) associated with the state-action pair.
+        #Ensure to add:
+        #Random variable weight initialization 
+        #Maybe bootstrapping (different subsets of data), 
+        #Hyperparameter variability
+        #Ensemble learning
 class CriticNetwork(nn.Module): 
-    def __init__(self):
+    def __init__(self, num_networks=6):
         super(CriticNetwork, self).__init__()
-        self.layer1 = nn.Linear(5, 512) #Excludes time as input
-        self.layer2 = nn.Linear(512, 256)
-        self.layer3 = nn.Linear(256, 64)
-        self.layer4 = nn.Linear(64, 1)
+        self.num_critics = num_networks
+        self.critics = nn.ModuleList([self.create_critic() for _ in range(num_networks)])
     
+    def create_critic(self):
+        return nn.Sequential(
+        nn.Linear(5, 512), #Excludes time as input
+        nn.ReLU(),
+        nn.Linear(512, 256),
+        nn.ReLU(),
+        nn.Linear(256, 64),
+        nn.ReLU(),
+        nn.Linear(64, 1)
+        )
+
     def forward(self, state, action):
-        q_value = nn.functional.relu(self.layer1(torch.cat([state, action],1)))
-        q_value = nn.functional.relu(self.layer2(q_value))
-        q_value = nn.functional.relu(self.layer3(q_value))
-        q_value = self.layer4(q_value)
+        q_values = [critic(torch.cat([state, action], 1)) for critic in self.critics]
+        return torch.stack(q_values, dim=1)
 
 
-
+#Replay Buffer
+    #Stores experiences during an agents interactions with environment. Breaks temporal correlations by shuffling and taking random buffer samples.
+    #Inputs: Agents interactions with the environment
 class ReplayBuffer(object):
     def __init__(self, state_dimensions, action_dimensions):
         self.max_size = int(200000)
@@ -131,14 +115,41 @@ class ReplayBuffer(object):
         return batch_state, batch_action, batch_reward, batch_next_state, batch_terminal_state
     
 
+
+#SAC Agent Class
+    #Encapsulates the entire SAC algorithm. Coordinates above actions/classes
+    #Contains useful methods for selecting actions, updating networks, and storing/retreiving data
+
 class SAC(object):
-     print("filler")
+    def __init__(self, actor, critic, replay_buffer, discount_factor=0.99, soft_update=0.0005, temperature=0.2):
+        self.actor = actor
+        self.target_actor = ActorNetwork()
+
+        self.critic = critic
+        self.target_critic = CriticNetwork()
+
+        self.replay_buffer = replay_buffer
+    
+    #Inputs:
+        #Time:                                      t
+        #Car Velocity:                              v_ego
+        #Forward Acceleration:                      a_ego
+        #lateral acceleration due to road roll:     road_lataccel
+
+    #Outputs
+        #Current car lateral acceleration:          current_lataccel
+        #Steer input:                               steer_action
     
 
     
 
 
-    
 
+
+
+#Environment Class
+    #Represents the environment in which the agent operates. It provides the agent with inputs/observations of the current state and rewards.
+
+#Training Loop
 
 
