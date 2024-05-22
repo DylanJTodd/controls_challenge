@@ -241,3 +241,42 @@ class SAC(object):
 
 # Environment Class
     # Represents the environment in which the agent operates. It provides the agent with inputs/observations of the current state and rewards.
+class Environment:
+    def __init__(self, model_path, data_path, controller, debug=False):
+        self.model = TinyPhysicsModel(model_path, debug)
+        self.simulator = TinyPhysicsSimulator(self.model, data_path, controller, debug)
+        self.debug = debug
+
+
+    # Reinitializes the simulator to starting state and returns initial state of environment
+    def reset(self):
+        self.simulator.reset()
+        state = self.get_state()
+        return state
+
+    # Takes one step in the simulation based on the given action. Updates simulator, computes and returns next state and reward
+    def step(self, action):
+        self.simulator.control_step(self.simulator.step_idx, action)
+        self.simulator.sim_step(self.simulator.step_idx)
+        self.simulator.step_idx += 1
+        next_state = self.get_state()
+        reward = self.compute_reward()
+        done = self.simulator.step_idx >= len(self.simulator.data)
+        return next_state, reward, done, {}
+    
+    # Retrieves the current state of simulator as a vector
+    def get_state(self):
+        state, _ = self.simulator.get_state_target(self.simulator.step_idx)
+        state_vector = numpy.array([state.roll_lataccel, state.v_ego, state.a_ego, self.simulator.current_lataccel])
+        return state_vector
+
+    # Calculates reward based off the difference between target and current lateral acceleration
+    def compute_reward(self):
+        if self.simulator.step_idx == 0:
+            return 0
+        target_lataccel = self.simulator.target_lataccel_history[self.simulator.step_idx - 1]
+        current_lataccel = self.simulator.current_lataccel
+        reward = -numpy.abs(target_lataccel - current_lataccel)
+        return reward
+
+    
