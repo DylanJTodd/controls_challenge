@@ -1,6 +1,6 @@
-#test: python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data/00000.csv --debug --controller simple
-#batch Metrics python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller simple
-#Generate comparison report python eval.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --test_controller simple --baseline_controller open
+# test: python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data/00000.csv --debug --controller simple
+# batch Metrics python tinyphysics.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --controller simple
+# Generate comparison report python eval.py --model_path ./models/tinyphysics.onnx --data_path ./data --num_segs 100 --test_controller simple --baseline_controller open
 
 import numpy
 import pandas
@@ -16,8 +16,18 @@ from torch.optim.lr_scheduler import StepLR
 import matplotlib.pyplot
 from tinyphysics import TinyPhysicsModel, TinyPhysicsSimulator, CONTROL_START_IDX
 
+# Inputs:
+    # Time:                                      t
+    # Car Velocity:                              v_ego
+    # Forward Acceleration:                      a_ego
+    # lateral acceleration due to road roll:     road_lataccel
 
-#Actor Network
+# Outputs
+    # Current car lateral acceleration:          current_lataccel
+    # Steer input:                               steer_action
+    
+
+# Actor Network
     # Determines the policy, maximizes expected future rewards
     # Inputs: Current state
     # Outputs: Probability distribution over action space 
@@ -44,8 +54,7 @@ class ActorNetwork(nn.Module):
         return steering, acceleration
 
     def log_prob(self, input_state, action):
-        steering, acceleration = self.forward(input_state)
-        mean = torch.cat((steering, acceleration), dim=-1)
+        mean = self.forward(input_state)
         log_std = self.log_std.expand_as(mean)
         std = torch.exp(log_std)
         normal = torch.distributions.Normal(mean, std)
@@ -54,16 +63,16 @@ class ActorNetwork(nn.Module):
 
 
 
-#Critic Network
-    #Multiple networks, each taking all inputs, however 8 differently trained networks for ensemble learning.
-    #Evaluates actions taken by actor. Estimates the expected return (Q-value) of taking a specific action given a specific state.
-    #Inputs: Current state, and current action
-    #Outputs: Individual estimate of expected return (Q-value) associated with the state-action pair.
-        #Ensure to add:
-        #Random variable weight initialization 
-        #Maybe bootstrapping (different subsets of data), 
-        #Hyperparameter variability
-        #Ensemble learning
+# Critic Network
+    # Multiple networks, each taking all inputs, however 8 differently trained networks for ensemble learning.
+    # Evaluates actions taken by actor. Estimates the expected return (Q-value) of taking a specific action given a specific state.
+    # Inputs: Current state, and current action
+    # Outputs: Individual estimate of expected return (Q-value) associated with the state-action pair.
+        # Ensure to add:
+        # Random variable weight initialization 
+        # Maybe bootstrapping (different subsets of data), 
+        # Hyperparameter variability
+        # Ensemble learning
 class CriticNetwork(nn.Module): 
     def __init__(self, num_networks=6):
         super(CriticNetwork, self).__init__()
@@ -86,9 +95,9 @@ class CriticNetwork(nn.Module):
         return torch.stack(q_values, dim=1)
 
 
-#Replay Buffer
-    #Stores experiences during an agents interactions with environment. Breaks temporal correlations by shuffling and taking random buffer samples.
-    #Inputs: Agents interactions with the environment
+# Replay Buffer
+    # Stores experiences during an agents interactions with environment. Breaks temporal correlations by shuffling and taking random buffer samples.
+    # Inputs: Agents interactions with the environment
 class ReplayBuffer(object):
     def __init__(self, state_dimensions, action_dimensions, max_size=200000):
         self.max_size = max_size
@@ -101,24 +110,24 @@ class ReplayBuffer(object):
         self.terminal_state = numpy.zeros((self.max_size, 1))
 
 
-    #Stores transition (current state, action taken, reward received, next observed state, terminal state indicator)
-    #Count points to the next available slot in the buffer, with index wrap around max_size
-    #Size reflects current number of transitions stored
+    # Stores transition (current state, action taken, reward received, next observed state, terminal state indicator)
+    # Count points to the next available slot in the buffer, with index wrap around max_size
+    # Size reflects current number of transitions stored
     def store(self, state, action, reward, next_state, terminal_state):
         self.state[self.count] = state
         self.action[self.count] = action
         self.reward[self.count] = reward
         self.next_state[self.count] = next_state
         self.terminal_state[self.count] = terminal_state
-        self.count = (self.count + 1) % self.max_size #When 'count' reaches max_size, it will be reset to 0
-        self.size = min(self.size + 1, self.max_size) #Record the number of transitions
+        self.count = (self.count + 1) % self.max_size # When 'count' reaches max_size, it will be reset to 0
+        self.size = min(self.size + 1, self.max_size) # Record the number of transitions
 
 
-    #Randomly selects a batch of transitions
-    #Each transition contains above mentioned features
-    #transitions converted to pytorch tensors
+    # Randomly selects a batch of transitions
+    # Each transition contains above mentioned features
+    # transitions converted to pytorch tensors
     def sample(self, batch_size):
-        index = numpy.random.choice(self.size, size=batch_size)
+        index = numpy.random.randint(0, self.size, size=batch_size)
         batch_state = torch.tensor(self.state[index], dtype=torch.float32)
         batch_action = torch.tensor(self.action[index], dtype=torch.float32)
         batch_reward = torch.tensor(self.reward[index], dtype=torch.float32)
@@ -126,24 +135,24 @@ class ReplayBuffer(object):
         batch_terminal_state = torch.tensor(self.terminal_state[index], dtype=torch.float32)
 
         return batch_state, batch_action, batch_reward, batch_next_state, batch_terminal_state
-    
+        
 
 
-#SAC Agent Class
-    #Encapsulates the entire SAC algorithm. Coordinates above actions/classes
-    #Contains useful methods for selecting actions, updating networks, and storing/retreiving data
+# SAC Agent Class
+    # Encapsulates the entire SAC algorithm. Coordinates above actions/classes
+    # Contains useful methods for selecting actions, updating networks, and storing/retreiving data
 
 class SAC(object):
     def __init__(self, actor, critic, replay_buffer, discount_factor=0.99, soft_update=0.0005, temperature=0.2, actor_learning=0.001, critic_learning=0.001):
         self.actor = actor
         self.critic = critic
-        self.target_critic = CriticNetwork()
+        self.target_critic = CriticNetwork(num_networks=critic.num_critics)
         self.target_critic.load_state_dict(self.critic.state_dict())
         self.replay_buffer = replay_buffer
 
-        self.discount_factor = discount_factor  #Priority of long-term rewards
-        self.soft_update = soft_update          #Gradually updates and prevents drastic changes in target values
-        self.temperature = temperature          #Entropy regularization, encourages exploration, avoids local optima
+        self.discount_factor = discount_factor  # Priority of long-term rewards
+        self.soft_update = soft_update          # Gradually updates and prevents drastic changes in target values
+        self.temperature = temperature          # Entropy regularization, encourages exploration, avoids local optima
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=actor_learning)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=critic_learning)
@@ -152,31 +161,30 @@ class SAC(object):
         self.critic_scheduler = StepLR(self.critic_optimizer, step_size=1000, gamma=0.9)
     
     
-    #Takes state and uses actor network to make a prediction
+    # Takes state and uses actor network to make a prediction
     def select_action(self, state):
-        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0) #Add batch dimension
+        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0) # Add batch dimension
         with torch.no_grad():
             steering, acceleration = self.actor(state)
-        return torch.cat((steering, acceleration), dim=1).squeeze(0).numpy() #Remove batch dimension
+        return torch.cat((steering, acceleration), dim=1).squeeze(0).numpy() # Remove batch dimension
 
-    #Samples a batch of transitions from replay buffer
-    #Updates critic
+    # Samples a batch of transitions from replay buffer
+    # Updates critic & actor networks
     def update_networks(self, batch_size):
-        state, action, reward, next_state, terminal = self.replay_buffer.sample(batch_size) # gather a batch of transitions
+        state, action, reward, next_state, terminal = self.replay_buffer.sample(batch_size)
 
         # Update critic
-        # Computes next actions and log probabilities  using actor network
-        # Calculates target Q value using reward, discount factors, and next Q values from the target critic, and entrop y term
+        # Computes next actions and log probabilities using actor network
         # Computes current Q value
-        # Calculates critic loss as MSE between current and target Q values
         # Backprop critic loss and updates network params
-        # Steps scheduler.
         with torch.no_grad():
             next_steering, next_acceleration = self.actor(next_state)
             next_action = torch.cat((next_steering, next_acceleration), dim=1)
             next_log_prob = self.actor.log_prob(next_state, next_action)
+
+            # SAC Bellman equation for calculating target Q from multiple critics.
             target_Q = reward + self.discount_factor * (1 - terminal) * (
-                torch.min(self.target_critic(next_state, next_action)) - self.temperature * next_log_prob
+                torch.min(self.target_critic(next_state, next_action), dim=1)[0].unsqueeze(-1) -  self.temperature * next_log_prob
             )
         
         current_Q = self.critic(state, action)
@@ -187,13 +195,17 @@ class SAC(object):
         self.critic_optimizer.step()
         self.critic_scheduler.step()
 
+
         # Update actor
         # Computes current actions and log probs
         # Calculates actor loss using mean value of entropy-regularized Q-values
         # Backprops and updates network params
         # Steps scheduler
-        current_action, current_log_prob = self.actor(state)
-        actor_loss = (self.temperature * current_log_prob - torch.min(self.critic(state, current_action))).mean()
+        current_steering, current_acceleration = self.actor(state)
+        current_action = torch.cat((current_steering, current_acceleration), dim=1)
+        current_log_prob = self.actor.log_prob(state, current_action)
+
+        actor_loss = (self.temperature * current_log_prob - torch.min(self.critic(state, current_action), dim=1)[0]).mean()
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -205,14 +217,15 @@ class SAC(object):
         for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
             target_param.data.copy_(self.soft_update * param.data + (1 - self.soft_update) * target_param.data)
     
-    def train(self, num_episodes, max_steps_per_episode, batch_size, env):
+    # Trains networks based on sampled experience through running multiple episodes and selecting multiple acitons. 
+    def train(self, num_episodes, max_steps_per_episode, batch_size, environment):
         for episode in range(num_episodes):
-            state = env.reset()
+            state = environment.reset()
             episode_reward = 0
 
             for step in range(max_steps_per_episode):
                 action = self.select_action(state)
-                next_state, reward, done, _ = env.step(action)
+                next_state, reward, done, _ = environment.step(action)
                 self.replay_buffer.store(state, action, reward, next_state, done)
                 episode_reward += reward
                 state = next_state
@@ -226,26 +239,5 @@ class SAC(object):
             print(f"Episode {episode + 1}: Total Reward = {episode_reward}")
 
 
-    #Inputs:
-        #Time:                                      t
-        #Car Velocity:                              v_ego
-        #Forward Acceleration:                      a_ego
-        #lateral acceleration due to road roll:     road_lataccel
-
-    #Outputs
-        #Current car lateral acceleration:          current_lataccel
-        #Steer input:                               steer_action
-    
-
-    
-
-
-
-
-
-#Environment Class
-    #Represents the environment in which the agent operates. It provides the agent with inputs/observations of the current state and rewards.
-
-#Training Loop
-
-
+# Environment Class
+    # Represents the environment in which the agent operates. It provides the agent with inputs/observations of the current state and rewards.
