@@ -280,3 +280,57 @@ class Environment:
         return reward
 
     
+
+# Policy evaluation
+# Runs episodes using learned policy and calculates evaluation metrics
+class PolicyEvaluator:
+    def __init__(self, environment, agent, num_episodes=10, max_steps_per_episode=1000):
+        self.environment = environment
+        self.agent = agent
+        self.num_episodes = num_episodes
+        self.max_steps_per_episode = max_steps_per_episode
+        self.total_rewards = []
+
+    def evaluate(self):
+        self.total_rewards = []
+        for episode in range(self.num_episodes):
+            state = self.environment.reset()
+            episode_reward = 0
+            for step in range(self.max_steps_per_episode):
+                action = self.agent.select_action(state)
+                next_state, reward, done, _ = self.environment.step(action)
+                episode_reward += reward
+                state = next_state
+                if done:
+                    break
+            self.total_rewards.append(episode_reward)
+            print(f"Episode {episode + 1}: Total Reward = {episode_reward}")
+        
+        avg_reward = numpy.mean(self.total_rewards)
+        std_reward = numpy.std(self.total_rewards)
+        print(f"Average Reward over {self.num_episodes} episodes: {avg_reward}")
+        print(f"Standard Deviation of Reward: {std_reward}")
+        
+        self.plot_rewards()
+        self.plot_reward_distribution()
+        
+        return avg_reward, std_reward
+
+    def plot_rewards(self):
+        matplotlib.pyplot.figure(figsize=(10, 6))
+        matplotlib.pyplot.plot(range(1, self.num_episodes + 1), self.total_rewards, marker='o', linestyle='-')
+        matplotlib.pyplot.title('Total Rewards per Episode')
+        matplotlib.pyplot.xlabel('Episode')
+        matplotlib.pyplot.ylabel('Total Reward')
+        matplotlib.pyplot.grid(True)
+        matplotlib.pyplot.show()
+
+    def plot_reward_distribution(self):
+        matplotlib.pyplot.figure(figsize=(10, 6))
+        matplotlib.pyplot.hist(self.total_rewards, bins=20, density=True, alpha=0.6, color='g')
+        matplotlib.pyplot.title('Distribution of Total Rewards')
+        matplotlib.pyplot.xlabel('Total Reward')
+        matplotlib.pyplot.ylabel('Frequency')
+        matplotlib.pyplot.grid(True)
+        matplotlib.pyplot.show()
+
