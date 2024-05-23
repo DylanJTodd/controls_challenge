@@ -1,6 +1,4 @@
 from . import BaseController
-
-
 class Controller(BaseController):
   """
   A simple controller that is the error between the target and current lateral acceleration times some factor
