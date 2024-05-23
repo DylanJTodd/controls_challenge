@@ -31,6 +31,7 @@ from tinyphysics import TinyPhysicsModel, TinyPhysicsSimulator, CONTROL_START_ID
     # Determines the policy, maximizes expected future rewards
     # Inputs: Current state
     # Outputs: Probability distribution over action space 
+
 class ActorNetwork(nn.Module):
     def __init__(self, max_steering=1.0, max_acceleration=1.0):
         super(ActorNetwork, self).__init__()
@@ -43,25 +44,24 @@ class ActorNetwork(nn.Module):
         self.layer4_acceleration = nn.Linear(64, 1)
 
         # Parameters for Gaussian policy
-        self.log_std = nn.Parameter(torch.zeros(1, 2))  # Log standard deviation
+        self.log_std = nn.Parameter(torch.zeros(1, 2))  # Log standard deviation ([1,2])
 
     def forward(self, input_state):
         x = nn.functional.relu(self.layer1(input_state))
         x = nn.functional.relu(self.layer2(x))
         x = nn.functional.relu(self.layer3(x))
-        steering = self.max_steering * torch.tanh(self.layer4_steering(x))
-        acceleration = self.max_acceleration * torch.tanh(self.layer4_acceleration(x))
+        steering = self.max_steering * torch.tanh(self.layer4_steering(x)) #[1,1]
+        acceleration = self.max_acceleration * torch.tanh(self.layer4_acceleration(x)) #[1,1]
         return steering, acceleration
 
     def log_prob(self, input_state, action):
-        mean = self.forward(input_state)
+        steering, acceleration = self.forward(input_state)
+        mean = torch.cat((steering, acceleration), dim=1)
         log_std = self.log_std.expand_as(mean)
         std = torch.exp(log_std)
         normal = torch.distributions.Normal(mean, std)
-        log_prob = normal.log_prob(action).sum(dim=-1, keepdim=True)
+        log_prob = normal.log_prob(mean).sum(dim=-1, keepdim=True)
         return log_prob
-
-
 
 # Critic Network
     # Multiple networks, each taking all inputs, however 8 differently trained networks for ensemble learning.
@@ -81,7 +81,7 @@ class CriticNetwork(nn.Module):
     
     def create_critic(self):
             return nn.Sequential(
-                nn.Linear(5, 512),  # 3 state + 2 action, excludes time
+                nn.Linear(6, 512),
                 nn.ReLU(),
                 nn.Linear(512, 256),
                 nn.ReLU(),
@@ -91,20 +91,22 @@ class CriticNetwork(nn.Module):
             )
 
     def forward(self, state, action):
+        steering, acceleration = action
+        action = torch.cat((steering, acceleration), dim=1)
         q_values = [critic(torch.cat([state, action], 1)) for critic in self.critics]
         return torch.stack(q_values, dim=1)
-
 
 # Replay Buffer
     # Stores experiences during an agents interactions with environment. Breaks temporal correlations by shuffling and taking random buffer samples.
     # Inputs: Agents interactions with the environment
 class ReplayBuffer(object):
-    def __init__(self, state_dimensions, action_dimensions, max_size=200000):
+    def __init__(self, state_dimensions, max_size=200000):
         self.max_size = max_size
         self.count = 0
         self.size = 0
         self.state = numpy.zeros((self.max_size, state_dimensions))
-        self.action = numpy.zeros((self.max_size, action_dimensions))
+        self.steering = numpy.zeros((self.max_size, 1))
+        self.acceleration = numpy.zeros((self.max_size, 1))
         self.reward = numpy.zeros((self.max_size, 1))
         self.next_state = numpy.zeros((self.max_size, state_dimensions))
         self.terminal_state = numpy.zeros((self.max_size, 1))
@@ -113,9 +115,10 @@ class ReplayBuffer(object):
     # Stores transition (current state, action taken, reward received, next observed state, terminal state indicator)
     # Count points to the next available slot in the buffer, with index wrap around max_size
     # Size reflects current number of transitions stored
-    def store(self, state, action, reward, next_state, terminal_state):
+    def store(self, state, steering, acceleration, reward, next_state, terminal_state):
         self.state[self.count] = state
-        self.action[self.count] = action
+        self.steering[self.count] = steering
+        self.acceleration[self.count] = acceleration
         self.reward[self.count] = reward
         self.next_state[self.count] = next_state
         self.terminal_state[self.count] = terminal_state
@@ -129,19 +132,19 @@ class ReplayBuffer(object):
     def sample(self, batch_size):
         index = numpy.random.randint(0, self.size, size=batch_size)
         batch_state = torch.tensor(self.state[index], dtype=torch.float32)
-        batch_action = torch.tensor(self.action[index], dtype=torch.float32)
+        batch_steering = torch.tensor(self.steering[index], dtype=torch.float32)
+        batch_acceleration = torch.tensor(self.acceleration[index], dtype=torch.float32)
         batch_reward = torch.tensor(self.reward[index], dtype=torch.float32)
         batch_next_state = torch.tensor(self.next_state[index], dtype=torch.float32)
         batch_terminal_state = torch.tensor(self.terminal_state[index], dtype=torch.float32)
 
-        return batch_state, batch_action, batch_reward, batch_next_state, batch_terminal_state
+        return batch_state, batch_steering, batch_acceleration, batch_reward, batch_next_state, batch_terminal_state
         
 
 
 # SAC Agent Class
     # Encapsulates the entire SAC algorithm. Coordinates above actions/classes
     # Contains useful methods for selecting actions, updating networks, and storing/retreiving data
-
 class SAC(object):
     def __init__(self, actor, critic, replay_buffer, discount_factor=0.99, soft_update=0.0005, temperature=0.2, actor_learning=0.001, critic_learning=0.001):
         self.actor = actor
@@ -171,23 +174,19 @@ class SAC(object):
     # Samples a batch of transitions from replay buffer
     # Updates critic & actor networks
     def update_networks(self, batch_size):
-        state, action, reward, next_state, terminal = self.replay_buffer.sample(batch_size)
+        state, steering, acceleration, reward, next_state, terminal = self.replay_buffer.sample(batch_size)
 
         # Update critic
-        # Computes next actions and log probabilities using actor network
-        # Computes current Q value
-        # Backprop critic loss and updates network params
         with torch.no_grad():
             next_steering, next_acceleration = self.actor(next_state)
-            next_action = torch.cat((next_steering, next_acceleration), dim=1)
+            next_action = tuple(next_steering, next_acceleration)
             next_log_prob = self.actor.log_prob(next_state, next_action)
 
-            # SAC Bellman equation for calculating target Q from multiple critics.
             target_Q = reward + self.discount_factor * (1 - terminal) * (
-                torch.min(self.target_critic(next_state, next_action), dim=1)[0].unsqueeze(-1) -  self.temperature * next_log_prob
+                torch.min(self.target_critic(next_state, next_action), dim=1)[0].unsqueeze(-1) - self.temperature * next_log_prob
             )
         
-        current_Q = self.critic(state, action)
+        current_Q = self.critic(state, tuple(steering, acceleration))
         critic_loss = nn.functional.mse_loss(current_Q, target_Q)
 
         self.critic_optimizer.zero_grad()
@@ -195,14 +194,9 @@ class SAC(object):
         self.critic_optimizer.step()
         self.critic_scheduler.step()
 
-
         # Update actor
-        # Computes current actions and log probs
-        # Calculates actor loss using mean value of entropy-regularized Q-values
-        # Backprops and updates network params
-        # Steps scheduler
         current_steering, current_acceleration = self.actor(state)
-        current_action = torch.cat((current_steering, current_acceleration), dim=1)
+        current_action = tuple(current_steering, current_acceleration)
         current_log_prob = self.actor.log_prob(state, current_action)
 
         actor_loss = (self.temperature * current_log_prob - torch.min(self.critic(state, current_action), dim=1)[0]).mean()
@@ -213,7 +207,6 @@ class SAC(object):
         self.actor_scheduler.step()
 
         # Soft update of target critic
-        # Gradually updates critic network parameters to slowly track critic network params, ensuring stable Q-values
         for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
             target_param.data.copy_(self.soft_update * param.data + (1 - self.soft_update) * target_param.data)
     
@@ -225,8 +218,9 @@ class SAC(object):
 
             for step in range(max_steps_per_episode):
                 action = self.select_action(state)
+                steering, acceleration = action
                 next_state, reward, done, _ = environment.step(action)
-                self.replay_buffer.store(state, action, reward, next_state, done)
+                self.replay_buffer.store(state, steering, acceleration, reward, next_state, done)
                 episode_reward += reward
                 state = next_state
 
@@ -256,13 +250,15 @@ class Environment:
 
     # Takes one step in the simulation based on the given action. Updates simulator, computes and returns next state and reward
     def step(self, action):
-        self.simulator.control_step(self.simulator.step_idx, action)
+        steering_action, acceleration_action = action
+        self.simulator.control_step(self.simulator.step_idx)
         self.simulator.sim_step(self.simulator.step_idx)
         self.simulator.step_idx += 1
         next_state = self.get_state()
         reward = self.compute_reward()
         done = self.simulator.step_idx >= len(self.simulator.data)
         return next_state, reward, done, {}
+
     
     # Retrieves the current state of simulator as a vector
     def get_state(self):
@@ -272,12 +268,14 @@ class Environment:
 
     # Calculates reward based off the difference between target and current lateral acceleration
     def compute_reward(self):
-        if self.simulator.step_idx == 0:
+        if self.simulator.step_idx <= 0 or self.simulator.step_idx > len(self.simulator.target_lataccel_history):
             return 0
+        
         target_lataccel = self.simulator.target_lataccel_history[self.simulator.step_idx - 1]
         current_lataccel = self.simulator.current_lataccel
-        reward = -numpy.abs(target_lataccel - current_lataccel)
+        reward = -numpy.abs(target_lataccel - current_lataccel).item()
         return reward
+
 
     
 
