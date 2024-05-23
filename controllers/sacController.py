@@ -1,7 +1,7 @@
 import torch
 import numpy
 
-class SACController:
+class sacController:
     def __init__(self, actor_network, critic_network, log_std):
         self.actor_network = actor_network
         self.critic_network = critic_network
