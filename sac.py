@@ -240,7 +240,7 @@ class Environment:
         self.model = TinyPhysicsModel(model_path, debug)
         self.simulator = TinyPhysicsSimulator(self.model, data_path, controller, debug)
         self.debug = debug
-
+        self.num_steps = 0
 
     # Reinitializes the simulator to starting state and returns initial state of environment
     def reset(self):
@@ -250,32 +250,33 @@ class Environment:
 
     # Takes one step in the simulation based on the given action. Updates simulator, computes and returns next state and reward
     def step(self, action):
-        steering_action, acceleration_action = action
-        self.simulator.control_step(self.simulator.step_idx)
-        self.simulator.sim_step(self.simulator.step_idx)
-        self.simulator.step_idx += 1
-        next_state = self.get_state()
-        reward = self.compute_reward()
-        done = self.simulator.step_idx >= len(self.simulator.data)
-        return next_state, reward, done, {}
+        target = self.get_state()[3]
+        self.simulator.step(action)
+        actual = self.simulator.current_lataccel_history[len(self.simulator.current_lataccel_history)-1]
+        self.calculate_reward(target, actual)
 
+    def calculate_reward(self, target, actual):
+        last_actual = self.simulator.current_lataccel_history[len(self.simulator.current_lataccel_history)-2]
+        lateral_cost = 100.0*(actual-target)*(actual-target)
+        jerk_cost = 100.0*(actual-last_actual)*(actual-last_actual)/0.1
+        delta_action = self.simulator.action_history[len(self.simulator.action_history) - 1] - self.simulator.action_history[len(self.simulator.action_history)-2]
+        action_cost = delta_action*delta_action
+        cost = (5.0*lateral_cost + 3.0*jerk_cost) + 10* action_cost
+        reward = -1.0*float(cost)
+        done=False
+
+        if self.simulator.step_idx==self.num_steps-1:
+            done = True
+        return actual, float(reward), done
     
     # Retrieves the current state of simulator as a vector
     def get_state(self):
-        state, _ = self.simulator.get_state_target(self.simulator.step_idx)
-        state_vector = numpy.array([state.roll_lataccel, state.v_ego, state.a_ego, self.simulator.current_lataccel])
-        return state_vector
-
-    # Calculates reward based off the difference between target and current lateral acceleration
-    def compute_reward(self):
-        if self.simulator.step_idx <= 0 or self.simulator.step_idx > len(self.simulator.target_lataccel_history):
-            return 0
+        state, target = self.simulator.get_state_target(self.simulator.step_idx)
+        roll_lateral_accel, car_velocity, forward_accel = state
         
-        target_lataccel = self.simulator.target_lataccel_history[self.simulator.step_idx - 1]
-        current_lataccel = self.simulator.current_lataccel
-        reward = -numpy.abs(target_lataccel - current_lataccel).item()
-        return reward
-
+        last_action = self.simulator.action_history[len(self.simulator.action_history)-1]
+        actual = self.simulator.current_lataccel_history[len(self.simulator.current_lataccel_history)-1]
+        return torch.tensor([car_velocity, forward_accel, roll_lateral_accel, target, actual, target-actual, last_action])
 
     
 
