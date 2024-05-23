@@ -146,13 +146,14 @@ class TinyPhysicsSimulator:
     state = self.data.iloc[step_idx]
     return State(roll_lataccel=state['roll_lataccel'], v_ego=state['v_ego'], a_ego=state['a_ego']), state['target_lataccel']
 
-  def step(self) -> None:
-    state, target = self.get_state_target(self.step_idx)
-    self.state_history.append(state)
-    self.target_lataccel_history.append(target)
-    self.control_step(self.step_idx)
-    self.sim_step(self.step_idx)
-    self.step_idx += 1
+  def step(self,action) -> None:
+      state, target = self.get_state_target(self.step_idx)
+      self.state_history.append(state)
+      self.target_lataccel_history.append(target)
+      self.control_step(self.step_idx,action)
+      pred = self.sim_step(self.step_idx)
+      self.step_idx += 1
+      return pred
 
   def plot_data(self, ax, lines, axis_labels, title) -> None:
     ax.clear()
