@@ -144,10 +144,11 @@ class TinyPhysicsSimulator:
     return State(roll_lataccel=state['roll_lataccel'], v_ego=state['v_ego'], a_ego=state['a_ego']), state['target_lataccel']
 
   def step(self,action) -> None:
+      steering, _ = action
       state, target = self.get_state_target(self.step_idx)
       self.state_history.append(state)
       self.target_lataccel_history.append(target)
-      self.control_step(self.step_idx,action)
+      self.control_step(self.step_idx,steering)
       pred = self.sim_step(self.step_idx)
       self.step_idx += 1
       return pred
